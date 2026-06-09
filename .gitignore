@@ -1,0 +1,27 @@
+# 大型目录 - 不提交到 Git
+PaddleSpeech-develop/
+models/
+build/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+dist/
+
+# 压缩包
+*.zip
+*.tar.gz
+*.tar.xz
+
+# 临时文件
+*.log
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 输出目录
+/tmp/tts_web_output/
