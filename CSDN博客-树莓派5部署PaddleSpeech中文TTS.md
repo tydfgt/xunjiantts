@@ -380,4 +380,283 @@ if __name__ == "__main__":
 
 ---
 
+## 十二、量化优化：55s→7s，模型体积缩减84%
+
+> 2026-06-09 更新：通过跳过 .pdz 解析、G2P ONNX INT8 量化等手段，将模型加载从 55s 加速到 7s，模型总体积从 2.1GB 缩减到 343MB。
+
+### 12.1 为什么要优化
+
+上一版虽然能跑，但有两个痛点：
+- **启动太慢**：每次启动 Web 服务要等 55 秒模型加载
+- **体积太大**：模型文件占 2.1GB，SD 卡空间紧张
+
+这些问题的根源是 PaddleSpeech 使用 `.pdz` 格式存储模型。`.pdz` 是 PaddlePaddle 的动态图训练检查点格式，里面不仅包含模型权重，还包含 Adam 优化器的动量（m/v）、训练轮数等冗余数据。
+
+举个直观的例子：
+
+| 文件 | .pdz 大小 | 纯权重大小 | 冗余比例 |
+|------|-----------|-----------|----------|
+| FastSpeech2 | 620MB | 142MB | 77% 是冗余 |
+| HiFiGAN | 958MB | 50MB | 95% 是冗余 |
+
+这就是为什么加载慢——皮皮艇不光要读权重，还要解析 1.5GB 的训练冗余数据。
+
+### 12.2 优化策略
+
+| 优化项 | 方法 | 效果 |
+|--------|------|------|
+| 模型加载加速 | 跳过 .pdz 解析，用 `state_dict` 加载纯权重 | 55s→7s（**8倍**） |
+| G2P 模型量化 | ONNX Runtime INT8 动态量化 | 606MB→152MB（**-75%**） |
+| 体积缩减 | 保存纯 state_dict（去掉优化器状态） | 2.1GB→343MB（**-84%**） |
+
+#### 12.2.1 G2P ONNX 量化
+
+G2P（字素转音素）是一个 ONNX 模型，负责把"你好"转成 `[n,i,2,h,ao,3]` 这样的音素序列。原始大小 606MB。
+
+INT8 量化非常简单，ONNX Runtime 提供了开箱即用的 API：
+
+```python
+from onnxruntime.quantization import quantize_dynamic, QuantType
+
+quantize_dynamic(
+    model_input="g2pW.onnx",       # 原始 FP32 模型
+    model_output="g2pW_int8.onnx", # 量化输出
+    weight_type=QuantType.QInt8,   # INT8 权重
+)
+```
+
+量化后 152MB，直接替换原文件，PaddleSpeech 无感使用：
+
+```bash
+cp g2pW.onnx g2pW.onnx.fp32_backup  # 备份原版
+cp g2pW_int8.onnx g2pW.onnx         # 替换为量化版
+```
+
+#### 12.2.2 模型加载加速的原理
+
+正常的 PaddleSpeech 加载流程：
+
+```python
+# 原版：加载 .pdz，解析训练检查点（55s）
+tts = TTSExecutor()
+tts(text="你好", output="out.wav")
+```
+
+优化版：手动构建模型架构 + `set_state_dict` 加载纯权重：
+
+```python
+# 1. 构建模型架构（几秒，纯 Python 对象创建）
+fs2 = FastSpeech2(idim=vocab_size, odim=n_mels, **config)
+am = FastSpeech2Inference(normalizer=..., model=fs2)
+
+# 2. 加载纯权重（1-2 秒，只读需要的参数）
+am.set_state_dict(paddle.load("fastspeech2_full.pdparams"))
+
+# 3. 推理（完全一样）
+mel = am(phone_ids)
+```
+
+关键洞察：**PaddleSpeech 的 `set_state_dict` 只加载权重张量，跳过优化器状态**。而 `.pdz` 的 `paddle.load` 需要解析完整的训练检查点结构。
+
+### 12.3 最大的坑：HiFiGAN weight_norm 调试记
+
+这是整个优化过程中最曲折的部分，花了 4 次尝试才解决。
+
+**现象**：优化版合成出的音频是连续的电流噪音，不是人声。
+
+**排查过程**：
+
+第一步，用相同的音素输入分别跑原版和优化版的声学模型（FastSpeech2）和声码器（HiFiGAN），看差异出在哪里：
+
+```
+mel 差异: 0.000000  ← 声学模型完全正确
+wav 差异: 0.699071  ← 声码器输出完全错误！
+```
+
+第二步，逐层对比两个模型的权重：
+
+```
+所有权重差异: 0.000000  ← 权重加载完全正确
+```
+
+权重一样但输出不同？这说明**模型的计算方式**不一样。
+
+第三步，看 `set_state_dict` 的警告日志：
+
+```
+Skip loading for hifigan_generator.input_conv.weight_g
+Skip loading for hifigan_generator.input_conv.weight_v
+...（几十条类似警告）
+```
+
+`weight_g` 和 `weight_v` 是什么？这就涉及 **Weight Normalization** 的概念。
+
+#### Weight Normalization 是什么
+
+Weight Normalization 是一种把神经网络权重分解为「方向」和「大小」两个参数的技术：
+
+$$\mathbf{w} = g \cdot \frac{\mathbf{v}}{\|\mathbf{v}\|}$$
+
+其中：
+- $\mathbf{v}$（`weight_v`）：方向向量
+- $g$（`weight_g`）：缩放因子（标量）
+
+在 HiFiGAN 的代码中，所有卷积层都用了 Weight Norm。`__init__` 中会自动创建 `weight_v` 和 `weight_g`：
+
+```python
+class HiFiGANGenerator(nn.Layer):
+    def __init__(self, ..., use_weight_norm=True):
+        self.input_conv = nn.Conv1D(...)
+        if use_weight_norm:
+            # 自动把 weight 分解为 weight_v 和 weight_g
+            nn.utils.weight_norm(self.input_conv)
+```
+
+但在推理时，Weight Norm 其实不需要——官方代码在加载完权重后会调用 `remove_weight_norm()` 把权重恢复成普通形式：
+
+```python
+# PaddleSpeech 官方加载方式（syn_utils.py）
+voc = voc_class(**config)
+voc.set_state_dict(paddle.load(ckpt)["generator_params"])
+voc.remove_weight_norm()   # ← 关键！推理时不保留 weight_norm
+voc.eval()
+```
+
+**问题来了**：我们的 `state_dict` 是从已经 `remove_weight_norm` 的模型保存的，里面**只有原始 `weight`，没有 `weight_v` 和 `weight_g`**。而新建的模型在 `__init__` 中自动应用了 `weight_norm`，创建了随机的 `weight_v` 和 `weight_g`。`set_state_dict` 能正确加载 `weight`，但 `weight_v` 和 `weight_g` 保持随机值。
+
+#### 四次失败的尝试
+
+| 尝试 | 方法 | 失败原因 |
+|------|------|----------|
+| 1 | 不做任何处理 | weight_v/weight_g 是随机的 |
+| 2 | set_state_dict → remove_weight_norm → weight_norm | remove_weight_norm 用随机 v*g 覆盖了正确的 weight |
+| 3 | 手动修正 weight_v = weight/‖weight‖ | weight_g 也没加载，仍是随机值 |
+| 4 | 同时修正 weight_g 和 weight_v | forward 中 weight_norm 的计算方式与手动有微妙差异 |
+
+#### 最终正确方案
+
+一句话：**先移除 weight_norm，再加载权重**。
+
+```python
+# 1. 创建模型（weight_norm 在 __init__ 中自动应用）
+hfg = HiFiGANGenerator(**config)
+
+# 2. 先移除所有 weight_norm（恢复 weight 为普通参数）
+def remove_all_weight_norm(module):
+    for child in module.named_children():
+        remove_all_weight_norm(child)
+    if hasattr(module, 'weight_g'):
+        nn.utils.remove_weight_norm(module)
+
+remove_all_weight_norm(hfg)
+
+# 3. 然后加载权重（此时 weight 就是普通参数，直接写入不经过 weight_norm）
+hfg.set_state_dict(paddle.load("hifigan_full.pdparams"))
+```
+
+**顺序至关重要！** 如果先 `set_state_dict` 再 `remove_weight_norm`，`remove_weight_norm` 会把随机 `weight_v` × `weight_g` 的结果写回 `weight`，导致正确的权重被随机值覆盖。
+
+验证结果：
+
+```
+mel 差异: 0.000000
+wav 差异: 0.000000  ← 完美！
+文件大小: 276044 bytes = 276044 bytes  ← 完全一致
+```
+
+### 12.4 最终性能对比
+
+| 指标 | 优化前 | 优化后 | 提升 |
+|------|--------|--------|------|
+| 模型加载 | 55s | 7s | **8x** |
+| G2P 模型 | 606MB | 152MB | **-75%** |
+| FastSpeech2 | 620MB (.pdz) | 142MB (权重) | **-77%** |
+| HiFiGAN | 958MB (.pdz) | 50MB (权重) | **-95%** |
+| 总体积 | 2184MB | 343MB | **-84%** |
+| 单句推理 | ~2.8s | ~3.6s | 略慢（可接受） |
+| 音频质量 | — | 差异 0.000000 | **完全一致** |
+
+### 12.5 优化版代码
+
+优化版 Web 服务核心代码（完整版见源码 `tts_web_quantized.py`）：
+
+```python
+class FastTTS:
+    """快速 TTS 引擎：跳过 .pdz，使用 state_dict 加载，55s→7s"""
+    
+    def load_models(self):
+        # ---- FastSpeech2 (声学模型) ----
+        fs2 = FastSpeech2(idim=vocab_size, odim=n_mels, **config)
+        am = FastSpeech2Inference(normalizer=am_norm, model=fs2)
+        am.eval()
+        am.set_state_dict(paddle.load("fastspeech2_full.pdparams"))
+        
+        # ---- HiFiGAN (声码器) ----
+        hfg = HiFiGANGenerator(**voc_config)
+        voc = HiFiGANInference(normalizer=voc_norm, hifigan_generator=hfg)
+        voc.eval()
+        
+        # 关键：先移除 weight_norm，再加载权重！
+        self._remove_all_weight_norm(hfg)
+        voc.set_state_dict(paddle.load("hifigan_full.pdparams"))
+    
+    def _remove_all_weight_norm(self, module):
+        """递归移除所有 weight_norm"""
+        for name, child in module.named_children():
+            self._remove_all_weight_norm(child)
+        if hasattr(module, 'weight_g'):
+            nn.utils.remove_weight_norm(module)
+    
+    def synthesize(self, text, output_path):
+        # 与原来完全相同的推理逻辑
+        frontend_dict = run_frontend(self.frontend, text, ...)
+        for phones in frontend_dict['phone_ids']:
+            mel = self.am_inference(phones)
+            wav = self.voc_inference(mel)
+        sf.write(output_path, wav.numpy(), samplerate=self.am_config.fs)
+```
+
+### 12.6 文件结构更新
+
+```
+~/tts/
+├── tts_web.py                     # 原版（保留不变，端口 8765）
+├── tts_web_quantized.py           # 🆕 优化版（端口 8766）
+├── quantize_experiment.py         # 🆕 量化实验脚本
+├── quantized_models/              # 🆕 量化数据目录
+│   ├── fastspeech2_full.pdparams  # 142MB FastSpeech2 纯权重
+│   ├── hifigan_full.pdparams      # 50MB  HiFiGAN 纯权重
+│   ├── normalizer_params.pkl      # 归一化参数
+│   └── g2pW_int8.onnx            # 152MB 量化 G2P 模型
+└── ...
+```
+
+### 12.7 启动方式
+
+```bash
+conda activate paddlespeech
+
+# 原版（保持不变）
+python tts_web.py               # http://树莓派IP:8765
+
+# 优化版（快速启动）
+python tts_web_quantized.py     # http://树莓派IP:8766
+```
+
+---
+
+## 十三、总结与经验
+
+在树莓派5上部署PaddleSpeech中文TTS，经历了安装踩坑、懒加载改造、模型量化、weight_norm调试等环节，最终得到了一个加载仅需7秒、体积不到350MB的生产可用方案。
+
+**给同样想在ARM设备上跑深度学习推理的朋友几点建议**：
+
+1. **不要用 pip 一把梭**，特别是 `pip install some-huge-package`。分批装，每批 3-5 个，随时 `free -h` 看内存
+2. **检查点文件（.pdz / .ckpt / .pth）通常包含冗余数据**。保存和加载纯权重（state_dict）可以大幅减小体积和加载时间
+3. **Weight Normalization/Batch Normalization/Dropout 在训练和推理时行为不同**。加载预训练权重时务必确认这些层处于什么状态
+4. **ONNX 量化在 CPU 推理中几乎零成本收益大**。onnxruntime 的 `quantize_dynamic` 一行代码就能把模型缩小 75%
+5. **先对比输出再上线**。用相同输入跑新旧模型，确认输出差异为 0 再替换
+
+---
+
 > 全文完。如果你也在树莓派上部署PaddleSpeech遇到了其他问题，欢迎留言交流。
