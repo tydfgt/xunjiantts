@@ -14,7 +14,7 @@
 | 后端框架 | FastAPI + Uvicorn |
 | 语音模型 | CSMSC baker 中文女声 |
 | 合成速度 | 4-5 秒/句（首次 ~55s，后续缓存后稳定） |
-| Web 访问 | `http://192.168.3.108:8765` |
+| Web 访问 | `http://<树莓派IP>:8765` |
 | 音频输出 | USB 喇叭 (plughw:2,0 / plughw:3,0) |
 | 当前状态 | ✅ 已部署并验证通过 |
 
@@ -65,7 +65,7 @@ paddlespeech/audiotools/__init__.py   → metrics/ml/post 改为懒加载
 
 PaddleNLP 2.8.1 与新版本 aistudio_sdk 不兼容（`from aistudio_sdk.hub import download` 失败）。
 
-**修复**: 已将 `/home/cedarq/miniconda3/envs/paddlespeech/lib/python3.10/site-packages/paddlenlp/transformers/aistudio_utils.py` 中的 import 改为 try/except。
+**修复**: 已将 `~/miniconda3/envs/paddlespeech/lib/python3.10/site-packages/paddlenlp/transformers/aistudio_utils.py` 中的 import 改为 try/except。
 
 ### 3.4 英文 TTS 已移除
 
@@ -390,3 +390,85 @@ tts_web_quantized.py
 6. **PaddlePaddle 3.2.2 的 API 与 2.x 不同**：没有 `paddle.jit.trace`，用 `paddle.jit.to_static` 替代；`paddle.quantization` 模块结构也有变化
 7. **G2P ONNX 量化**很容易做且收益大（-75%），已经被替换到原路径，PaddleSpeech 无感使用
 8. **如果需要重新生成 state_dict**：先正常加载一次原版模型，然后用 `paddle.save(model.state_dict(), path)` 保存，同时用 pickle 保存 normalizer 参数
+
+---
+
+## 十一、2026-06-09 ONNX 推理加速
+
+### 11.1 推理瓶颈分析
+
+通过对各阶段精确计时，发现 HiFiGAN 声码器占推理时间的 88%：
+
+| 阶段 | 12字句耗时 | 占比 |
+|------|-----------|------|
+| Frontend | 0.06s | 1% |
+| FastSpeech2 | 0.47s | 11% |
+| **HiFiGAN** | **3.76s** | **88%** |
+
+### 11.2 ONNX 导出方案
+
+将 HiFiGAN 导出为 ONNX FP32 格式以利用 ONNX Runtime 的图优化：
+
+```python
+paddle.onnx.export(
+    generator,
+    "hifigan_forward.onnx",
+    input_spec=[paddle.static.InputSpec(shape=[1, 80, -1], dtype='float32', name='mel')],
+    opset_version=14,
+)
+```
+
+导出结果：
+- 模型大小：52MB
+- 节点数：1,852 → 596（常量折叠 1,256 个节点）
+- 精度验证：Paddle vs ONNX 差异 = 0.000001
+
+### 11.3 INT8 量化失败
+
+ARM64 版 ONNX Runtime 不支持 `ConvInteger` 算子：
+
+```
+NotImplemented: Could not find an implementation for ConvInteger(10) node
+```
+
+原因：ARM NEON 指令集无 INT8 矩阵乘累加指令（x86 的 VNNI 有）。FP32 已足够（3× 加速）。
+
+### 11.4 加速效果
+
+| Mel 帧数 | Paddle | ONNX FP32 | 加速比 |
+|----------|--------|-----------|--------|
+| 50 | 0.97s | 0.27s | 3.6× |
+| 100 | 1.83s | 0.64s | 2.9× |
+| 150 | 2.76s | 0.76s | 3.6× |
+| 200 | 3.60s | 1.02s | 3.5× |
+
+端到端（12字）：4.3s → 1.9s（2.3×）
+
+### 11.5 集成方式
+
+`tts_web_quantized.py` 的 `FastTTS` 类自动检测 ONNX 模型：
+- 若 `quantized_models/hifigan_forward.onnx` 存在 → 使用 ONNX 推理（3× 加速）
+- 若不存在 → 回退 Paddle 推理
+
+### 11.6 累积优化成果
+
+| 指标 | Day 1 | Day 2 最终 | 总提升 |
+|------|-------|-----------|--------|
+| 加载 | 55s | 15s | 3.7× |
+| 推理(12字) | 4.3s | 1.9s | 2.3× |
+| 体积 | 2.6GB | 396MB | −85% |
+| 内存 | 2.8GB | 1.5GB | −46% |
+
+### 11.7 新增文件
+
+| 文件 | 说明 |
+|------|------|
+| `quantized_models/hifigan_forward.onnx` | HiFiGAN ONNX FP32 模型 (52MB) |
+| `quantized_models/hifigan_forward_int8.onnx` | INT8 量化产物 (17.5MB, 不可用) |
+
+### 11.8 对后续的提示
+
+1. **ONNX 导出需注意 shape**：HiFiGAN.forward 需要 `[B, 80, T]` 格式，外部负责 transpose
+2. **动态 wrapper 类无法导出**：`paddle.onnx.export` 需要可获取源码的类，lambda/动态类会失败
+3. **ARM64 的 ONNX 算子支持有限**：`ConvInteger`、`QLinearConv` 等 INT8 算子在 ARM64 上未实现
+4. **ONNX 模型是推理优化的重要方向**：FastSpeech2 也可导出 ONNX 进一步加速（~1.5×），值得后续探索

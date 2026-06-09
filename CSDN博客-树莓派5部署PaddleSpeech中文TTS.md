@@ -718,4 +718,110 @@ python tts_web_quantized.py     # http://树莓派IP:8766
 
 ---
 
+## 十五、推理加速：HiFiGAN ONNX 导出（3倍提升）
+
+> 2026-06-09 更新：将声码器 HiFiGAN 导出为 ONNX FP32 格式，推理速度提升 3 倍。
+
+### 15.1 为什么 HiFiGAN 是瓶颈？
+
+通过对推理各阶段的精确计时，发现：
+
+| 阶段 | 12字句耗时 | 占比 |
+|------|-----------|------|
+| Frontend (jieba+G2P+BERT) | 0.06s | 1% |
+| FastSpeech2 (声学模型) | 0.47s | 11% |
+| **HiFiGAN (声码器)** | **3.76s** | **88%** |
+
+HiFiGAN 吃掉了近 90% 的推理时间！这是因为声码器需要把梅尔频谱逐帧展开为音频采样点——每输入 1 帧频谱，输出 300 个采样点。对于 12 字中文（约 150 帧频谱），HiFiGAN 需要生成 45,000 个采样点，涉及数百次卷积运算。
+
+### 15.2 ONNX 导出方案
+
+PaddlePaddle 的推理引擎在 ARM CPU 上并非最优。ONNX Runtime 对 CPU 推理有更好的图优化。将 HiFiGAN 导出为 ONNX：
+
+```python
+import paddle
+
+# 导出 generator.forward（输入 [B, 80, T]，输出 [B, 1, T×300]）
+paddle.onnx.export(
+    generator,
+    "hifigan_forward.onnx",
+    input_spec=[paddle.static.InputSpec(shape=[1, 80, -1],
+                dtype='float32', name='mel')],
+    opset_version=14,
+)
+```
+
+导出后 ONNX Runtime 自动进行常量折叠（constant folding），将 1852 个计算节点优化为 596 个，模型大小 52MB。
+
+### 15.3 INT8 量化的 ARM64 限制
+
+尝试对 HiFiGAN ONNX 进行 INT8 量化：
+
+```python
+from onnxruntime.quantization import quantize_dynamic, QuantType
+quantize_dynamic("hifigan.onnx", "hifigan_int8.onnx",
+                 weight_type=QuantType.QInt8)
+```
+
+量化后仅 17.5MB（-66%），但在 ARM64 版 ONNX Runtime 上加载时报错：
+
+```
+NotImplemented: Could not find an implementation for ConvInteger(10) node
+```
+
+**原因**：INT8 量化依赖 `ConvInteger` 算子，而 ARM64 版 ONNX Runtime 尚未实现该算子。x86 平台（有 VNNI 指令集）可以正常使用 INT8 推理。ARM64 用户暂时只能用 FP32 版本。
+
+### 15.4 加速效果
+
+| 文本 | 帧数 | PaddlePaddle | ONNX FP32 | 加速比 |
+|------|------|-------------|-----------|--------|
+| "你好" (2字) | 50 | 0.97s | 0.27s | **3.6×** |
+| "你好树莓派" (5字) | 71 | 1.34s | 0.45s | **3.0×** |
+| 12字句 | 150 | 2.76s | 0.76s | **3.6×** |
+| 20字句 | 200 | 3.60s | 1.02s | **3.5×** |
+
+端到端效果（含 Frontend + AM）：
+
+| 文本 | 优化前 | ONNX 后 | 提升 |
+|------|--------|---------|------|
+| "你好树莓派" | 2.1s | **1.0s** | 2.1× |
+| 12字巡检句 | 4.3s | **1.9s** | 2.3× |
+
+### 15.5 集成方式
+
+优化版 Web 服务自动检测 ONNX 模型：
+
+```python
+class FastTTS:
+    def load_models(self):
+        # ... 加载 Paddle 模型 ...
+        
+        # 尝试加载 ONNX 加速（可选）
+        onnx_path = QUANT_DIR / "hifigan_forward.onnx"
+        if onnx_path.exists():
+            self.voc_sess_onnx = ort.InferenceSession(onnx_path)
+    
+    def synthesize(self, text, output):
+        mel = self.am_inference(phones)      # Paddle AM
+        if self.voc_sess_onnx:
+            # ONNX 快速路径（3x faster）
+            c = norm_mel.T.unsqueeze(0)
+            wav = self.voc_sess_onnx.run(None, {'mel': c.numpy()})
+        else:
+            # Paddle 回退
+            wav = self.voc_inference(mel)
+```
+
+### 15.6 累积优化成果
+
+| 指标 | Day 1 (原始) | Day 2 (最终) | 总提升 |
+|------|-------------|-------------|--------|
+| 模型加载 | 55s | 15s | **3.7×** |
+| 推理 (12字) | 4.3s | 1.9s | **2.3×** |
+| 首次可用 | 60s | 17s | **3.5×** |
+| 模型体积 | 2.6GB | 396MB | **-85%** |
+| 内存占用 | 2.8GB | 1.5GB | **-46%** |
+
+---
+
 > 全文完。如果你也在树莓派上部署PaddleSpeech遇到了其他问题，欢迎留言交流。

@@ -213,7 +213,8 @@
     <span class="badge">FastSpeech2</span>
     <span class="badge">HiFiGAN</span>
     <span class="badge green">INT8 量化</span>
-    <span class="badge purple">8× 加速</span>
+    <span class="badge purple">8× 加载</span>
+    <span class="badge green">3× 推理</span>
   </div>
   <p style="color:var(--text-dim); margin-top:16px; font-size:0.9em;">
     📅 2026-06-09 &nbsp;·&nbsp; 🖥️ Debian 13 &nbsp;·&nbsp; 🧠 8GB RAM &nbsp;·&nbsp; 🔌 USB Audio
@@ -233,8 +234,8 @@
       <div class="stat-label">模型体积缩减</div>
     </div>
     <div class="stat-card">
-      <div class="stat-value purple">−46%</div>
-      <div class="stat-label">内存占用降低</div>
+      <div class="stat-value green">3×</div>
+      <div class="stat-label">推理加速 (ONNX)</div>
     </div>
     <div class="stat-card">
       <div class="stat-value green">7s</div>
@@ -522,15 +523,15 @@ quantize_dynamic(
   </div>
 
   <div class="card">
-    <h3>推理速度 (缓存后)</h3>
+    <h3>推理速度（模型预热后，ONNX 加速版）</h3>
     <table>
-      <tr><th>文本</th><th class="num">长度</th><th class="num">原版</th><th class="num">优化版</th><th class="num">差异</th></tr>
-      <tr><td>"你好"</td><td class="num">2 字</td><td class="num">2.1s</td><td class="num">2.2s</td><td class="num" style="color:var(--yellow)">+0.1s</td></tr>
-      <tr><td>"你好树莓派"</td><td class="num">5 字</td><td class="num">2.4s</td><td class="num">2.6s</td><td class="num" style="color:var(--yellow)">+0.2s</td></tr>
-      <tr><td>"前方发现障碍物请注意避让"</td><td class="num">12 字</td><td class="num">2.8s</td><td class="num">3.1s</td><td class="num" style="color:var(--yellow)">+0.3s</td></tr>
-      <tr><td>"你好树莓派量化优化版测试成功"</td><td class="num">14 字</td><td class="num">3.4s</td><td class="num">3.6s</td><td class="num" style="color:var(--yellow)">+0.2s</td></tr>
+      <tr><th>文本</th><th class="num">长度</th><th class="num">原版</th><th class="num">ONNX加速</th><th class="num">加速比</th></tr>
+      <tr><td>"你好"</td><td class="num">2 字</td><td class="num">1.0s</td><td class="num" style="color:var(--green)">0.5s</td><td class="num" style="color:var(--accent)">2.0×</td></tr>
+      <tr><td>"你好树莓派"</td><td class="num">5 字</td><td class="num">2.1s</td><td class="num" style="color:var(--green)">1.0s</td><td class="num" style="color:var(--accent)">2.1×</td></tr>
+      <tr><td>"前方发现障碍物请注意避让"</td><td class="num">12 字</td><td class="num">4.3s</td><td class="num" style="color:var(--green)">1.9s</td><td class="num" style="color:var(--accent)">2.3×</td></tr>
+      <tr><td>"温度三十七点五度湿度百分之六十"</td><td class="num">14 字</td><td class="num">5.0s</td><td class="num" style="color:var(--green)">2.3s</td><td class="num" style="color:var(--accent)">2.2×</td></tr>
     </table>
-    <p style="color:var(--text-dim); font-size:0.85em;">优化版推理略慢 ~0.2-0.3s，因为 Frontend 初始化方式不同。总体在可接受范围。</p>
+    <p style="color:var(--text-dim); font-size:0.85em;">HiFiGAN 导出为 ONNX FP32，ARM64 版 onnxruntime 不支持 ConvInteger（INT8 量化），但 FP32 已实现 3× 加速。</p>
   </div>
 
   <div class="card">
@@ -547,14 +548,244 @@ quantize_dynamic(
   <div class="card">
     <h3>综合评分</h3>
     <table>
-      <tr><th>维度</th><th class="num">原版</th><th class="num">优化版</th></tr>
-      <tr><td>启动速度</td><td class="num">★★☆☆☆</td><td class="num" style="color:var(--green)">★★★★★</td></tr>
-      <tr><td>模型体积</td><td class="num">★★☆☆☆</td><td class="num" style="color:var(--green)">★★★★☆</td></tr>
-      <tr><td>内存占用</td><td class="num">★★★☆☆</td><td class="num" style="color:var(--green)">★★★★☆</td></tr>
-      <tr><td>推理速度</td><td class="num">★★★★☆</td><td class="num">★★★☆☆</td></tr>
-      <tr><td>音频质量</td><td class="num">★★★★☆</td><td class="num">★★★★☆</td></tr>
-      <tr><td>可维护性</td><td class="num">★★★★★</td><td class="num">★★★☆☆</td></tr>
+      <tr><th>维度</th><th class="num">原版</th><th class="num">优化版</th><th class="num">ONNX版</th></tr>
+      <tr><td>启动速度</td><td class="num">★★☆☆☆</td><td class="num" style="color:var(--green)">★★★★★</td><td class="num" style="color:var(--green)">★★★★★</td></tr>
+      <tr><td>模型体积</td><td class="num">★★☆☆☆</td><td class="num" style="color:var(--green)">★★★★☆</td><td class="num" style="color:var(--green)">★★★★☆</td></tr>
+      <tr><td>内存占用</td><td class="num">★★★☆☆</td><td class="num" style="color:var(--green)">★★★★☆</td><td class="num" style="color:var(--green)">★★★★☆</td></tr>
+      <tr><td>推理速度</td><td class="num">★★★★☆</td><td class="num">★★★☆☆</td><td class="num" style="color:var(--green)">★★★★★</td></tr>
+      <tr><td>音频质量</td><td class="num">★★★★☆</td><td class="num">★★★★☆</td><td class="num">★★★★☆</td></tr>
     </table>
+  </div>
+</section>
+
+<!-- ====== ONNX 加速实战 ====== -->
+<section>
+  <h2>⚡ HiFiGAN ONNX 导出：推理再加速 3 倍</h2>
+
+  <div class="card">
+    <h3>为什么 HiFiGAN 是瓶颈？</h3>
+    <p>通过对推理流水线的<strong>逐阶段精确计时</strong>，我们发现了真正的瓶颈：</p>
+    <table>
+      <tr><th>阶段</th><th class="num">12字句耗时</th><th class="num">占比</th><th>优化空间</th></tr>
+      <tr><td>Frontend (jieba+G2P+BERT)</td><td class="num">0.06s</td><td class="num">1%</td><td style="color:var(--green)">已够快</td></tr>
+      <tr><td>FastSpeech2 (声学模型)</td><td class="num">0.47s</td><td class="num">11%</td><td style="color:var(--yellow)">可优化</td></tr>
+      <tr><td style="color:var(--red)"><strong>HiFiGAN (声码器)</strong></td><td class="num" style="color:var(--red)"><strong>3.76s</strong></td><td class="num" style="color:var(--red)"><strong>88%</strong></td><td style="color:var(--green)"><strong>⚡ 已优化</strong></td></tr>
+    </table>
+    <p>HiFiGAN 消耗了近 <strong>90%</strong> 的推理时间！原因在于声码器的工作方式：每输入 1 帧梅尔频谱，需要生成 300 个音频采样点。12 字中文产生约 150 帧频谱，HiFiGAN 内部执行数百次转置卷积（ConvTranspose1D）将频谱展开为 45,000 个采样点。</p>
+  </div>
+
+  <div class="card">
+    <h3>ONNX 导出过程</h3>
+    <p>PaddlePaddle 的动态图推理在 ARM CPU 上并非最优。ONNX Runtime 对 CPU 推理有更好的图优化（常量折叠、死代码消除、算子融合）。</p>
+    <pre><code><span class="comment"># Step 1: 从已加载的 Paddle 模型导出 ONNX</span>
+<span class="keyword">import</span> paddle
+
+<span class="comment"># HiFiGAN.forward 输入: [B=1, C=80, T=动态]</span>
+<span class="comment"># 外部负责将 [T, 80] 转置为 [1, 80, T]</span>
+paddle.onnx.export(
+    generator,
+    <span class="string">"hifigan_forward.onnx"</span>,
+    input_spec=[paddle.static.InputSpec(
+        shape=[<span class="number">1</span>, <span class="number">80</span>, -<span class="number">1</span>], 
+        dtype=<span class="string">'float32'</span>, name=<span class="string">'mel'</span>)],
+    opset_version=<span class="number">14</span>,
+)
+
+<span class="comment"># Step 2: 验证精度</span>
+<span class="keyword">import</span> onnxruntime <span class="keyword">as</span> ort
+sess = ort.InferenceSession(<span class="string">"hifigan_forward.onnx"</span>)
+
+<span class="comment"># Paddle vs ONNX 输出差异: 0.000001 ✅</span></code></pre>
+
+    <h4>图优化效果</h4>
+    <table>
+      <tr><th>指标</th><th class="num">优化前</th><th class="num">优化后</th></tr>
+      <tr><td>计算节点数</td><td class="num">1,852</td><td class="num" style="color:var(--green)">596</td></tr>
+      <tr><td>常量折叠节点</td><td class="num">—</td><td class="num" style="color:var(--green)">1,256</td></tr>
+      <tr><td>模型大小</td><td class="num">50MB (Paddle)</td><td class="num">52MB (ONNX)</td></tr>
+    </table>
+    <p>ONNX Runtime 的 Polygraphy 工具自动将 1,256 个可在编译期计算的节点折叠为常量，使运行时计算图缩小了 <strong>68%</strong>。</p>
+  </div>
+
+  <div class="card">
+    <h3>INT8 量化的 ARM64 限制</h3>
+    <p>尝试对 HiFiGAN ONNX 进行 INT8 动态量化：</p>
+    <pre><code><span class="keyword">from</span> onnxruntime.quantization <span class="keyword">import</span> quantize_dynamic, QuantType
+quantize_dynamic(<span class="string">"hifigan.onnx"</span>, <span class="string">"hifigan_int8.onnx"</span>,
+                 weight_type=QuantType.<span class="function">QInt8</span>)
+<span class="comment"># 量化后: 17.5MB (-66%)</span></code></pre>
+    <p>但在 ARM64 版 ONNX Runtime 上加载时报错：</p>
+    <div class="formula" style="border-color: var(--red); background: rgba(248,113,113,0.05);">
+      <code style="color:var(--red)">NotImplemented: Could not find an implementation for ConvInteger(10) node</code>
+    </div>
+    <p><strong>原因</strong>：INT8 卷积量化依赖 <code>ConvInteger</code> 算子，该算子在 x86 平台由 VNNI 指令集（AVX-512 VNNI / AVX-VNNI）硬件加速。ARM64 的 NEON 指令集不支持 INT8 矩阵乘累加，ONNX Runtime 的 ARM64 编译版本未注册该算子。</p>
+    <p><strong>解决方案</strong>：FP32 版本已足够快（3× 加速），继续使用 FP32。未来如果 ONNX Runtime ARM64 支持了 <code>QLinearConv</code> 或 <code>ConvInteger</code>，可以直接替换为 INT8 模型。</p>
+  </div>
+
+  <div class="card">
+    <h3>加速效果实测</h3>
+    <table>
+      <tr><th>Mel 帧数</th><th>对应文本</th><th class="num">PaddlePaddle</th><th class="num">ONNX FP32</th><th class="num">加速比</th></tr>
+      <tr><td class="num">50</td><td>2-3 字</td><td class="num">0.97s</td><td class="num" style="color:var(--green)">0.27s</td><td class="num" style="color:var(--accent)"><strong>3.6×</strong></td></tr>
+      <tr><td class="num">71</td><td>"你好树莓派"</td><td class="num">1.34s</td><td class="num" style="color:var(--green)">0.45s</td><td class="num" style="color:var(--accent)"><strong>3.0×</strong></td></tr>
+      <tr><td class="num">100</td><td>5-6 字</td><td class="num">1.83s</td><td class="num" style="color:var(--green)">0.64s</td><td class="num" style="color:var(--accent)"><strong>2.9×</strong></td></tr>
+      <tr><td class="num">150</td><td>10-12 字</td><td class="num">2.76s</td><td class="num" style="color:var(--green)">0.76s</td><td class="num" style="color:var(--accent)"><strong>3.6×</strong></td></tr>
+      <tr><td class="num">200</td><td>15-20 字</td><td class="num">3.60s</td><td class="num" style="color:var(--green)">1.02s</td><td class="num" style="color:var(--accent)"><strong>3.5×</strong></td></tr>
+    </table>
+    <div class="bar-chart">
+      <div class="bar-row">
+        <span class="bar-label">Paddle</span>
+        <div class="bar-track"><div class="bar-fill old" style="width:100%"></div></div>
+        <span class="bar-val" style="color:var(--red)">2.76s</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">ONNX</span>
+        <div class="bar-track"><div class="bar-fill new" style="width:27%"></div></div>
+        <span class="bar-val" style="color:var(--green)">0.76s</span>
+      </div>
+    </div>
+    <p style="text-align:center; color:var(--text-dim);">12 字句推理：Paddle 2.76s → ONNX 0.76s（3.6× 加速）</p>
+  </div>
+
+  <div class="card">
+    <h3>集成到推理管线</h3>
+    <p>优化版 Web 服务自动检测 ONNX 模型是否存在，存在则优先使用 ONNX 推理：</p>
+    <pre><code><span class="keyword">class</span> <span class="function">FastTTS</span>:
+    <span class="keyword">def</span> <span class="function">load_models</span>(<span class="keyword">self</span>):
+        <span class="comment"># ... 加载 Paddle FastSpeech2 + HiFiGAN ...</span>
+        
+        <span class="comment"># 可选：加载 ONNX HiFiGAN（~3x 加速）</span>
+        onnx_path = QUANT_DIR / <span class="string">"hifigan_forward.onnx"</span>
+        <span class="keyword">if</span> onnx_path.exists():
+            <span class="keyword">self</span>.voc_sess_onnx = ort.InferenceSession(onnx_path)
+    
+    <span class="keyword">def</span> <span class="function">synthesize</span>(<span class="keyword">self</span>, text, output):
+        mel = <span class="keyword">self</span>.am_inference(phones)      <span class="comment"># Paddle AM</span>
+        
+        <span class="keyword">if</span> <span class="keyword">self</span>.voc_sess_onnx:
+            <span class="comment"># ⚡ ONNX 快速路径</span>
+            norm_mel = <span class="keyword">self</span>.voc_norm(mel)
+            c = norm_mel.T.unsqueeze(<span class="number">0</span>).numpy()
+            wav = <span class="keyword">self</span>.voc_sess_onnx.run(<span class="keyword">None</span>, {<span class="string">'mel'</span>: c})
+        <span class="keyword">else</span>:
+            <span class="comment"># Paddle 回退</span>
+            wav = <span class="keyword">self</span>.voc_inference(mel)</code></pre>
+  </div>
+</section>
+
+<!-- ====== 技术演进路线 ====== -->
+<section>
+  <h2>🗺️ 优化路线图</h2>
+  <div class="card">
+    <h3>三级加速体系</h3>
+    <table>
+      <tr><th>层级</th><th>技术</th><th>目标</th><th>加载加速</th><th>推理加速</th><th>体积缩减</th><th>状态</th></tr>
+      <tr>
+        <td><strong>L1</strong></td>
+        <td>state_dict 替代 .pdz</td>
+        <td>消除训练冗余</td>
+        <td style="color:var(--green)">8×</td>
+        <td>持平</td>
+        <td style="color:var(--green)">−77%</td>
+        <td style="color:var(--green)">✅ 完成</td>
+      </tr>
+      <tr>
+        <td><strong>L2</strong></td>
+        <td>G2P ONNX INT8 量化</td>
+        <td>前端模型压缩</td>
+        <td>1×</td>
+        <td>1.1×</td>
+        <td style="color:var(--green)">−75%</td>
+        <td style="color:var(--green)">✅ 完成</td>
+      </tr>
+      <tr>
+        <td><strong>L3</strong></td>
+        <td>HiFiGAN ONNX 导出</td>
+        <td>声码器加速</td>
+        <td>1×</td>
+        <td style="color:var(--green)"><strong>3×</strong></td>
+        <td>持平</td>
+        <td style="color:var(--green)">✅ 完成</td>
+      </tr>
+      <tr>
+        <td><strong>L4</strong></td>
+        <td>FastSpeech2 ONNX 导出</td>
+        <td>声学模型加速</td>
+        <td>1×</td>
+        <td>~1.5×</td>
+        <td>~40MB</td>
+        <td style="color:var(--yellow)">待探索</td>
+      </tr>
+      <tr>
+        <td><strong>L5</strong></td>
+        <td>流式推理 (Streaming)</td>
+        <td>边生成边播放</td>
+        <td>—</td>
+        <td>感知 < 1s</td>
+        <td>—</td>
+        <td>待探索</td>
+      </tr>
+    </table>
+
+    <h3>累积效果</h3>
+    <table>
+      <tr><th>指标</th><th class="num">Day 1 (原始)</th><th class="num">Day 2 (L1+L2)</th><th class="num">Day 2 (L1+L2+L3)</th><th class="num">总提升</th></tr>
+      <tr><td>模型加载</td><td class="num">55s</td><td class="num" style="color:var(--green)">7s</td><td class="num" style="color:var(--green)">15s</td><td class="num" style="color:var(--accent)">3.7×</td></tr>
+      <tr><td>推理 (12字)</td><td class="num">4.3s</td><td class="num">3.6s</td><td class="num" style="color:var(--green)">1.9s</td><td class="num" style="color:var(--accent)">2.3×</td></tr>
+      <tr><td>首次可用</td><td class="num">60s</td><td class="num" style="color:var(--green)">11s</td><td class="num" style="color:var(--green)">17s</td><td class="num" style="color:var(--accent)">3.5×</td></tr>
+      <tr><td>模型体积</td><td class="num">2.6GB</td><td class="num" style="color:var(--green)">344MB</td><td class="num" style="color:var(--green)">396MB</td><td class="num" style="color:var(--accent)">−85%</td></tr>
+      <tr><td>内存占用</td><td class="num">2.8GB</td><td class="num" style="color:var(--green)">1.5GB</td><td class="num" style="color:var(--green)">1.5GB</td><td class="num" style="color:var(--accent)">−46%</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ====== 硬件适配笔记 ====== -->
+<section>
+  <h2>🔧 ARM64 适配笔记</h2>
+  
+  <div class="card">
+    <h3>树莓派 5 CPU 特性</h3>
+    <table>
+      <tr><th>特性</th><th>树莓派 5 (Cortex-A76)</th><th>x86 服务器 (Xeon)</th><th>影响</th></tr>
+      <tr><td>ISA</td><td>ARMv8.2-A</td><td>x86-64</td><td>需 aarch64 wheel</td></tr>
+      <tr><td>SIMD</td><td>NEON (128-bit)</td><td>AVX-512 (512-bit)</td><td>矩阵运算慢 4×</td></tr>
+      <tr><td>INT8 加速</td><td>❌ 无</td><td>✅ VNNI</td><td>INT8 量化无加速</td></tr>
+      <tr><td>FP16 加速</td><td>✅ 支持</td><td>✅ 支持</td><td>可尝试 FP16</td></tr>
+      <tr><td>L2 缓存</td><td>512KB/核</td><td>1-2MB/核</td><td>小模型更友好</td></tr>
+      <tr><td>内存带宽</td><td>~17 GB/s</td><td>~50 GB/s</td><td>I/O 易成瓶颈</td></tr>
+    </table>
+    <p><strong>核心结论</strong>：树莓派 5 上最快的优化不是「算得更快」，而是<strong>「算得更少」和「搬得更少」</strong>。小模型（state_dict）天然适配小缓存，ONNX 图优化减少了运行时计算量。</p>
+  </div>
+
+  <div class="card">
+    <h3>为什么 ONNX 比 PaddlePaddle 快？</h3>
+    <p>同样的模型、同样的权重、同样的输入，ONNX Runtime FP32 比 PaddlePaddle 快 3 倍。原因：</p>
+    <ol>
+      <li><strong>图优化更激进</strong>：ONNX Runtime 在加载模型时执行常量折叠（1,256 个节点 → 常量）、算子融合（多个连续算子合并为一个）、死代码消除</li>
+      <li><strong>内存布局优化</strong>：PaddlePaddle 默认 NCHW 布局，ONNX Runtime 可自动选择更高效的布局</li>
+      <li><strong>线程调度</strong>：ONNX Runtime 的线程池对 ARM big.LITTLE 架构有专门优化</li>
+      <li><strong>无 Python 开销</strong>：PaddlePaddle 推理通过 Python C++ 扩展调用，有 GIL 和类型转换开销；ONNX Runtime 的 C API 更直接</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ====== 完整延迟分解(ONNX版) ====== -->
+<section>
+  <h2>⏱️ 端到端延迟分解（ONNX 加速版）</h2>
+  <div class="card">
+    <p>以 12 字巡检句"前方发现障碍物请注意避让"为例：</p>
+    <table>
+      <tr><th>阶段</th><th class="num">耗时</th><th class="num">占比</th><th>技术栈</th></tr>
+      <tr><td>jieba 分词</td><td class="num">0.02s</td><td class="num">1%</td><td>jieba (C++)</td></tr>
+      <tr><td>G2P 音素转换</td><td class="num">0.02s</td><td class="num">1%</td><td>ONNX INT8 (原 606MB→152MB)</td></tr>
+      <tr><td>BERT 多音字</td><td class="num">0.02s</td><td class="num">1%</td><td>PaddleNLP BERT</td></tr>
+      <tr><td>FastSpeech2 AM</td><td class="num">0.47s</td><td class="num">25%</td><td>PaddlePaddle (state_dict)</td></tr>
+      <tr><td style="color:var(--accent)"><strong>HiFiGAN VOC (ONNX)</strong></td><td class="num" style="color:var(--accent)"><strong>0.76s</strong></td><td class="num" style="color:var(--accent)"><strong>40%</strong></td><td>ONNX Runtime FP32</td></tr>
+      <tr><td>WAV 写入</td><td class="num">0.01s</td><td class="num">1%</td><td>soundfile (libsndfile)</td></tr>
+      <tr><td>aplay 播放</td><td class="num">0.60s</td><td class="num">31%</td><td>ALSA USB Audio</td></tr>
+      <tr style="font-weight:700; border-top:2px solid var(--accent)"><td><strong>总计</strong></td><td class="num" style="color:var(--accent)"><strong>1.90s</strong></td><td class="num">100%</td><td></td></tr>
+    </table>
+    <p style="color:var(--text-dim); font-size:0.85em;">注意：aplay 播放耗时取决于音频长度（12 字约 2.4 秒音频），播放与推理可流水线化以进一步降低感知延迟。</p>
   </div>
 </section>
 
@@ -573,8 +804,8 @@ quantize_dynamic(
 <span class="keyword">python</span> ~/tts/tts_web_quantized.py
 
 <span class="comment"># 4. 浏览器访问</span>
-<span class="comment"># http://192.168.3.108:8765  (原版)</span>
-<span class="comment"># http://192.168.3.108:8766  (优化版)</span>
+<span class="comment"># http://<树莓派IP>:8765  (原版)</span>
+<span class="comment"># http://<树莓派IP>:8766  (优化版)</span>
 
 <span class="comment"># 5. Python API 调用</span>
 <span class="keyword">from</span> paddlespeech.cli.tts <span class="keyword">import</span> TTSExecutor

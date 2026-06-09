@@ -4,6 +4,13 @@ models/
 build/
 quantized_models/
 
+# 含敏感系统配置（IP/MAC/密码），仅本地保留
+系统文档.md
+在树莓派上搭建kaldi离线语音识别系统（交叉编译）.md
+
+# ONNX 模型文件（体积大，可本地重新生成）
+*.onnx
+
 # Python
 __pycache__/
 *.py[cod]

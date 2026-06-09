@@ -15,7 +15,7 @@
 | 架构 | aarch64 (64位 ARM) |
 | Python 环境 | Miniconda3 (conda 26.1.1) |
 | 虚拟环境 | `tts` (Python 3.11) |
-| 虚拟环境路径 | `/home/cedarq/miniconda3/envs/tts/` |
+| 虚拟环境路径 | `~/miniconda3/envs/tts/` |
 
 ---
 
