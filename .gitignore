@@ -2,6 +2,7 @@
 PaddleSpeech-develop/
 models/
 build/
+quantized_models/
 
 # Python
 __pycache__/
