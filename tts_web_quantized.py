@@ -61,6 +61,8 @@ class FastTTS:
         self.frontend = None
         self.am_config = None
         self.voc_config = None
+        self.voc_norm = None          # ZScore normalizer (用于 ONNX 推理)
+        self.voc_sess_onnx = None     # ONNX Runtime session (HiFiGAN FP32)
 
     def load_models(self):
         """加载所有模型（AM + Vocoder + Frontend）"""
@@ -132,6 +134,23 @@ class FastTTS:
         t_voc = time.time() - t0
         print(f"  [VOC] HiFiGAN 加载完成 ({t_voc:.1f}s)")
 
+        # ---- ONNX HiFiGAN (可选加速) ----
+        self.voc_norm = voc_norm
+        onnx_path = QUANT_DIR / "hifigan_forward.onnx"
+        if onnx_path.exists():
+            t0 = time.time()
+            import onnxruntime as ort
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = 2
+            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+            self.voc_sess_onnx = ort.InferenceSession(
+                str(onnx_path), providers=['CPUExecutionProvider'],
+                sess_options=opts)
+            t_onnx = time.time() - t0
+            print(f"  [ONNX] HiFiGAN ONNX 加载完成 ({t_onnx:.1f}s, ~3x 加速推理)")
+        else:
+            print(f"  [ONNX] 未找到 ONNX 模型，使用 Paddle 推理")
+
         # ---- Frontend (文本前端) ----
         t0 = time.time()
         from paddlespeech.t2s.frontend.zh_frontend import Frontend
@@ -176,11 +195,22 @@ class FastTTS:
         )
         phone_ids = frontend_dict['phone_ids']
 
-        # --- AM：音素 → 梅尔频谱 ---
+        # --- AM：音素 → 梅尔频谱 / VOC：梅尔频谱 → 音频 ---
         wav_all = None
         for part_phone_ids in phone_ids:
             with paddle.no_grad():
-                mel = self.am_inference(part_phone_ids)
+                mel = self.am_inference(part_phone_ids)  # [T, 80]
+
+            if self.voc_sess_onnx is not None:
+                # ONNX 加速路径 (~3x faster than Paddle)
+                norm_mel = self.voc_norm(mel)  # 归一化
+                c = norm_mel.transpose([1, 0]).unsqueeze(0)  # [1, 80, T]
+                onnx_out = self.voc_sess_onnx.run(
+                    None, {'mel': c.numpy().astype('float32')})
+                wav = paddle.to_tensor(
+                    onnx_out[0].squeeze(0).transpose(1, 0))  # [N, 1]
+            else:
+                # Paddle 推理（回退方案）
                 wav = self.voc_inference(mel)
 
             if wav_all is None:
